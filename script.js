@@ -28,6 +28,7 @@ let objects = [
         x: 0, 
         y: 0,
         rotation: 0,
+        velocity: 16.0,
         texture: assets.ships,
         textureRegion: { x: 0, y: 0, w: 32, h: 32 },
         time: 0.0
@@ -40,27 +41,31 @@ assets.ships.src = "assets/ships.png";
 assets.tiles.src = "assets/tiles.png";
 assets.map.src = "assets/map.png";
 
+function fract(n) { return n - Math.floor(n); }
+
 function onStep(deltatime) {
     const newObjects = [];
     for (let i = 0; i < objects.length; i++) {
         const object = objects[i];
-        let shouldRemove = false;
 
         if (object.type === "player") {
             const x = (input["ArrowRight"] || 0.0) - (input["ArrowLeft"] || 0.0);
             const y = (input["ArrowUp"] || 0.0) - (input["ArrowDown"] || 0.0);
 
-            object.x += Math.sin(object.rotation) * y * deltatime * 16.0;
-            object.y -= Math.cos(object.rotation) * y * deltatime * 16.0;
+            object.velocity = Math.max(8.0, Math.min(object.velocity + y * deltatime * 8.0, 32.0));
+            object.x += Math.sin(object.rotation) * object.velocity * deltatime;
+            object.y -= Math.cos(object.rotation) * object.velocity * deltatime;
             object.rotation += x * deltatime * Math.PI;
+            newObjects.push(object);
 
             if (object.time === 0.0 && (input["z"] || input["Z"])) {
                 object.time = 0.1;
-                objects.push({
+                newObjects.push({
                     type: "munition",
                     x: object.x + Math.sin(object.rotation) * 1.0,
                     y: object.y - Math.cos(object.rotation) * 1.0,
                     rotation: object.rotation,
+                    velocity: 64.0,
                     texture: assets.tiles,
                     textureRegion: { x: 0, y: 0, w: 16, h: 16 },
                     time: 0.0
@@ -70,17 +75,18 @@ function onStep(deltatime) {
             }
 
         } else if (object.type === "munition") {
-            object.x += Math.sin(object.rotation) * deltatime * 32.0;
-            object.y -= Math.cos(object.rotation) * deltatime * 32.0;
+            object.x += Math.sin(object.rotation) * object.velocity * deltatime;
+            object.y -= Math.cos(object.rotation) * object.velocity * deltatime;
             object.time += deltatime;
-            if (object.time >= 1.0) {
-                shouldRemove = true;
+            if (object.time < 1.0) {
+                newObjects.push(object);
             }
         }
 
-        if (!shouldRemove) {
-            newObjects.push(object);
-        }
+        if (object.x > assets.map.width / 16.0) { object.x -= assets.map.width / 16.0; }
+        if (object.x < 0.0) { object.x += assets.map.width / 16.0; }
+        if (object.y > assets.map.height / 16.0) { object.y -= assets.map.height / 16.0; }
+        if (object.y < 0.0) { object.y += assets.map.height / 16.0; }
     }
     objects = newObjects;
 }
@@ -92,18 +98,24 @@ function onEvent(e) {
 function onRender() {
     ctx.reset();
     ctx.imageSmoothingEnabled = false;
-    //ctx.fillStyle = "black";
-    //ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.scale(2, 2);
-    ctx.filter = "blur(1px)";
-    ctx.fillStyle = ctx.createPattern(assets.map, "repeat");
+    ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.filter = "none";
 
     ctx.resetTransform();
     ctx.translate(canvas.width * 0.5, canvas.height * 0.5);
     ctx.scale(32, 32);
+    ctx.translate(-objects[0].x, -objects[0].y);
+
+    {
+        ctx.save();
+        ctx.filter = "blur(1px)";
+        for (let y = -1; y <= 1; y++) {
+            for (let x = -1; x <= 1; x++) {
+                ctx.drawImage(assets.map, x * assets.map.width / 16.0, y * assets.map.height / 16.0, assets.map.width / 16.0, assets.map.height / 16.0);
+            }
+        }
+        ctx.restore();
+    }
 
     for (let i = 0; i < objects.length; i++) {
         const object = objects[i];
@@ -118,7 +130,15 @@ function onRender() {
             ctx.shadowBlur = 16;
         }
 
-        ctx.translate(object.x, object.y);
+        let x = object.x;
+        let y = object.y;
+
+        if (x - objects[0].x > assets.map.width / 32.0) { x -= assets.map.width / 16.0; }
+        if (x - objects[0].x < -assets.map.width / 32.0) { x += assets.map.width / 16.0; }
+        if (y - objects[0].y > assets.map.height / 32.0) { y -= assets.map.height / 16.0; }
+        if (y - objects[0].y < -assets.map.height / 32.0) { y += assets.map.height / 16.0; }
+
+        ctx.translate(x, y);
         ctx.rotate(object.rotation);
         ctx.translate(-object.textureRegion.w / 32, -object.textureRegion.h / 32);
         ctx.drawImage(object.texture, object.textureRegion.x, object.textureRegion.y, object.textureRegion.w, object.textureRegion.h, 0, 0, object.textureRegion.w / 16, object.textureRegion.h / 16);
