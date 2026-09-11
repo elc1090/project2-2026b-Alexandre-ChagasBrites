@@ -1,15 +1,7 @@
-/*import { initializeApp } from "firebase/app";
-import { getDatabase } from "firebase/database";
+"use client";
 
-const firebaseConfig = {
-  databaseURL: "https://elc1090-project2-2026b-default-rtdb.firebaseio.com",
-};
-
-const app = initializeApp(firebaseConfig);
-const database = getDatabase(app);*/
-
-const canvas = document.querySelector("canvas");
-const ctx = canvas.getContext("2d");
+let canvas: HTMLCanvasElement | null;
+let ctx: CanvasRenderingContext2D | null;
 
 const game = {
     timestamp: undefined,
@@ -37,13 +29,23 @@ let objects = [
 
 let input = {};
 
-assets.ships.src = "assets/ships.png";
-assets.tiles.src = "assets/tiles.png";
-assets.map.src = "assets/map.png";
+assets.ships.src = "./ships.png";
+assets.tiles.src = "./tiles.png";
+assets.map.src = "./map.png";
 
-function fract(n) { return n - Math.floor(n); }
+export default function Canvas() {
 
-function onStep(deltatime) {
+    useEffect(() => {
+        canvas = document.querySelector("canvas");
+        ctx = canvas.getContext("2d");
+    }, []);
+
+    return (
+        <canvas></canvas>
+    );
+}
+
+function onStep(deltatime: number) {
     const newObjects = [];
     for (let i = 0; i < objects.length; i++) {
         const object = objects[i];
@@ -83,10 +85,12 @@ function onStep(deltatime) {
             }
         }
 
-        if (object.x > assets.map.width / 16.0) { object.x -= assets.map.width / 16.0; }
-        if (object.x < 0.0) { object.x += assets.map.width / 16.0; }
-        if (object.y > assets.map.height / 16.0) { object.y -= assets.map.height / 16.0; }
-        if (object.y < 0.0) { object.y += assets.map.height / 16.0; }
+        while (object.x > assets.map.width / 16.0) { object.x -= assets.map.width / 16.0; }
+        while (object.x < 0.0) { object.x += assets.map.width / 16.0; }
+        while (object.y > assets.map.height / 16.0) { object.y -= assets.map.height / 16.0; }
+        while (object.y < 0.0) { object.y += assets.map.height / 16.0; }
+        while (object.rotation > Math.PI) { object.rotation -= Math.PI * 2.0; }
+        while (object.rotation < -Math.PI) { object.rotation += Math.PI * 2.0; }
     }
     objects = newObjects;
 }
@@ -103,7 +107,10 @@ function onRender() {
 
     ctx.resetTransform();
     ctx.translate(canvas.width * 0.5, canvas.height * 0.5);
+    const dpr = window.devicePixelRatio || 1;
+    ctx.scale(dpr, dpr);
     ctx.scale(32, 32);
+
     ctx.translate(-objects[0].x, -objects[0].y);
 
     {
@@ -147,11 +154,12 @@ function onRender() {
 }
 
 function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
 }
 
-function gameloop(timestamp) {
+function gameloop(timestamp: DOMHighResTimeStamp) {
     if (game.timestamp !== undefined) {
         const deltatime = timestamp - game.timestamp;
         onStep(deltatime / 1000.0);
