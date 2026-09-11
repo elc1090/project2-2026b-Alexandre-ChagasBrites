@@ -1,154 +1,110 @@
 "use client";
 
-import { useEffect } from 'react';
+import { useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, get, update, push, onValue, onChildAdded, onChildRemoved, onDisconnect } from "firebase/database";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyAF7df33ABVrRoHnyXeRAkAqHchsMSDSzk",
-  authDomain: "pixel-shmup.firebaseapp.com",
-  projectId: "pixel-shmup",
-  storageBucket: "pixel-shmup.firebasestorage.app",
-  messagingSenderId: "226791231751",
-  appId: "1:226791231751:web:cb34c8d4d9478c0a2735a2"
+type Rect = {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-
-const offsetRef = ref(db, ".info/serverTimeOffset");
-let offsetVal = 0.0;
-
-onValue(offsetRef, (data) => {
-    offsetVal = data.val() || 0.0;
-});
-
-let canvas: HTMLCanvasElement | null;
-let ctx: CanvasRenderingContext2D | null;
-
-const game = {
-    timestamp: undefined,
-    accum: 0
+const enum ObjectType {
+    None,
+    Ship,
+    Munition
 };
 
-const assets = {
-    ships: new Image(),
-    tiles: new Image(),
-    map: new Image()
+const enum ObjectOwnership {
+    None,
+    Local,
+    Remote
 };
 
-let objects = [
-    { 
-        type: "player",
-        ref: push(ref(db, "players")),
-        x: 0, 
-        y: 0,
-        rotation: 0,
-        velocity: 16.0,
-        serverRotation: 0.0,
-        serverVelocity: 0.0,
-        texture: assets.ships,
-        textureRegion: { x: 0, y: 0, w: 32, h: 32 },
-        time: 0.0,
-        updateTime: 0.0
-    }
-];
+type Object = {
+    type: ObjectType;
+    ownership: ObjectOwnership;
+    ref: any;
+    x: number;
+    y: number;
+    rotation: number;
+    velocity: number;
+    clientX: number;
+    clientY: number;
+    clientRotation: number;
+    clientVelocity: number;
+    serverX: number;
+    serverY: number;
+    serverRotation: number;
+    serverVelocity: number;
+    texture: HTMLImageElement;
+    textureRegion: Rect;
+    shootTime: number;
+    updateTime: number;
+    blendTime: number;
+    blendFactor: number;
+};
 
-onDisconnect(objects[0].ref).remove();
+type Assets = {
+    ships: HTMLImageElement;
+    tiles: HTMLImageElement;
+    map: HTMLImageElement;
+};
 
-let input = {};
+type Game = {
+    canvas: HTMLCanvasElement;
+    ctx: CanvasRenderingContext2D;
 
-assets.ships.src = "./ships.png";
-assets.tiles.src = "./tiles.png";
-assets.map.src = "./map.png";
+    timestamp: DOMHighResTimeStamp;
+    accum: number;
+    input: any;
+    
+    assets: Assets;
+    objects: Object[];
 
-onChildAdded(ref(db, "players"), (data) => {
-    if (data.key === objects[0].ref.key) {
-        return;
-    }
-
-    const objectRef = ref(db, "players/" + data.key);
-
-    let t = data.val().timestamp || 0.0;
-    if (t !== 0.0 && offsetVal != null) {
-        t = (new Date().getTime() + offsetVal - data.val().timestamp) / 1000.0;
-    }
-    const x = data.val().serverX + Math.sin(data.val().serverRotation) * data.val().serverVelocity * t;
-    const y = data.val().serverY - Math.cos(data.val().serverRotation) * data.val().serverVelocity * t;
-
-    const object = {
-        ref: objectRef,
-        x: x,
-        y: y,
-        rotation: data.val().serverRotation,
-        velocity: data.val().serverVelocity,
-        clientX: x,
-        clientY: y,
-        clientRotation: data.val().serverRotation,
-        clientVelocity: data.val().serverVelocity,
-        serverX: x,
-        serverY: y,
-        serverRotation: data.val().serverRotation,
-        serverVelocity: data.val().serverVelocity,
-        texture: Object.values(assets).find(asset => asset.src === data.val().texture),
-        textureRegion: data.val().textureRegion,
-        time: 0.0,
-        blend: 1.0
-    };
-    objects.push(object);
-
-    onValue(objectRef, (data) => {
-        if (data.val() !== null) {
-            object.clientX = object.x;
-            object.clientY = object.y;
-            object.clientRotation = object.rotation;
-            object.clientVelocity = object.velocity;
-            object.serverRotation = data.val().serverRotation;
-            object.serverVelocity = data.val().serverVelocity;
-
-            let t = data.val().timestamp || 0.0;
-            if (t !== 0.0 && offsetVal != null) {
-                t = (new Date().getTime() + offsetVal - data.val().timestamp) / 1000.0;
-            }
-
-            object.serverX = data.val().serverX + Math.sin(object.serverRotation) * object.serverVelocity * t;
-            object.serverY = data.val().serverY - Math.cos(object.serverRotation) * object.serverVelocity * t;
-            object.time = 0.0;
-            object.blend = 0.0;
-        }
-    });
-});
-
-onChildRemoved(ref(db, "players"), (data) => {
-    for (let i = 0; i < objects.length; i++) {
-        if (objects[i].ref.key === data.key) {
-            objects.splice(i, 1);
-            return;
-        }
-    }
-});
+    app: any;
+    db: any;
+    offsetVal: number;
+};
 
 export default function Canvas() {
 
     useEffect(() => {
-        canvas = document.querySelector("canvas");
-        ctx = canvas.getContext("2d");
-
-        const object = objects[0];
-        let timestamp = 0.0;
-        if (offsetVal !== null) {
-            timestamp = new Date().getTime() + offsetVal;
+        const canvas = document.querySelector("canvas");
+        if (canvas === null) {
+            return;
         }
 
-        set(object.ref, {
-            serverX: object.x, 
-            serverY: object.y,
-            serverRotation: object.rotation,
-            serverVelocity: object.velocity,
-            texture: object.texture.src,
-            textureRegion: object.textureRegion,
-            timestamp: timestamp
-        });
+        const ctx = canvas.getContext("2d");
+        if (ctx === null) {
+            return;
+        }
+
+        const game: Game = {
+            canvas: canvas,
+            ctx: ctx,
+
+            timestamp: 0.0,
+            accum: 0.0,
+            input: {},
+            
+            assets: {
+                ships: new Image(),
+                tiles: new Image(),
+                map: new Image()
+            },
+            objects: [],
+
+            app: null,
+            db: null,
+            offsetVal: 0.0
+        };
+
+        initGame(game);
+        initDatabase(game);
+        onInit(game);
     }, []);
 
     return (
@@ -166,14 +122,158 @@ function boundedLerp(a: number, b: number, t: number, min: number, max: number) 
     return a + delta * t;
 }
 
-function onStep(deltatime: number) {
-    const newObjects = [];
-    for (let i = 0; i < objects.length; i++) {
-        const object = objects[i];
+function initGame(game: Game) {
+    game.assets.ships.src = "./ships.png";
+    game.assets.tiles.src = "./tiles.png";
+    game.assets.map.src = "./map.png";
 
-        if (object.type === "player") {
-            const x = (input["ArrowRight"] || 0.0) - (input["ArrowLeft"] || 0.0);
-            const y = (input["ArrowUp"] || 0.0) - (input["ArrowDown"] || 0.0);
+    window.addEventListener("keydown", (e) => { game.input[e.key] = true; });
+    window.addEventListener("keyup", (e) => { game.input[e.key] = false; });
+    window.addEventListener("blur", (e) => { game.input = {}; });
+
+    window.addEventListener("resize", () => { resizeCanvas(game); });
+    window.addEventListener("load", () => {
+        const onAnimationFrame = (timestamp: DOMHighResTimeStamp) => {
+            if (game.timestamp !== undefined) {
+                const deltatime = timestamp - game.timestamp;
+                onStep(game, deltatime / 1000.0);
+
+                /*game.accum = Math.min(game.accum + deltatime, 100.0);
+                while (game.accum >= 1000.0 / 60.0) {
+                    onStep(1.0 / 60.0);
+                    game.accum -= 1000.0 / 60.0;
+                }*/
+            }
+            game.timestamp = timestamp;
+
+            onRender(game);
+            requestAnimationFrame(onAnimationFrame);
+        };
+
+        resizeCanvas(game);
+        requestAnimationFrame(onAnimationFrame);
+    });
+}
+
+function initDatabase(game: Game) {
+    const firebaseConfig = {
+        apiKey: "AIzaSyAF7df33ABVrRoHnyXeRAkAqHchsMSDSzk",
+        authDomain: "pixel-shmup.firebaseapp.com",
+        projectId: "pixel-shmup",
+        storageBucket: "pixel-shmup.firebasestorage.app",
+        messagingSenderId: "226791231751",
+        appId: "1:226791231751:web:cb34c8d4d9478c0a2735a2"
+    };
+    game.app = initializeApp(firebaseConfig);
+    game.db = getDatabase(game.app);
+
+    const offsetRef = ref(game.db, ".info/serverTimeOffset");
+    onValue(offsetRef, (data: any) => {
+        game.offsetVal = data.val() || 0.0;
+    });
+
+    onChildAdded(ref(game.db, "players"), (data: any) => {
+        if (data.key === game.objects[0].ref.key) {
+            return;
+        }
+        
+        const texture = Object.values(game.assets).find(asset => asset.src === data.val().texture);
+        if (texture === undefined) {
+            return;
+        }
+
+        const objectRef = ref(game.db, "players/" + data.key);
+        let offsetTime = getTimediff(game, data.val().timestamp || 0.0);
+        const x = data.val().serverX + Math.sin(data.val().serverRotation) * data.val().serverVelocity * offsetTime;
+        const y = data.val().serverY - Math.cos(data.val().serverRotation) * data.val().serverVelocity * offsetTime;
+
+        const object: Object = {
+            type: data.val().objectType,
+            ownership: ObjectOwnership.Remote,
+            ref: objectRef,
+            x: x,
+            y: y,
+            rotation: data.val().serverRotation,
+            velocity: data.val().serverVelocity,
+            clientX: x,
+            clientY: y,
+            clientRotation: data.val().serverRotation,
+            clientVelocity: data.val().serverVelocity,
+            serverX: x,
+            serverY: y,
+            serverRotation: data.val().serverRotation,
+            serverVelocity: data.val().serverVelocity,
+            texture: texture,
+            textureRegion: data.val().textureRegion,
+            shootTime: 0.0,
+            updateTime: 0.0,
+            blendTime: 0.0,
+            blendFactor: 1.0
+        };
+        game.objects.push(object);
+
+        onValue(objectRef, (data: any) => {
+            if (data.val() !== null) {
+                let offsetTime = getTimediff(game, data.val().timestamp || 0.0);
+                object.clientX = object.x;
+                object.clientY = object.y;
+                object.clientRotation = object.rotation;
+                object.clientVelocity = object.velocity;
+                object.serverRotation = data.val().serverRotation;
+                object.serverVelocity = data.val().serverVelocity;
+                object.serverX = data.val().serverX + Math.sin(object.serverRotation) * object.serverVelocity * offsetTime;
+                object.serverY = data.val().serverY - Math.cos(object.serverRotation) * object.serverVelocity * offsetTime;
+                object.blendTime = 0.0;
+                object.blendFactor = 0.0;
+            }
+        });
+    });
+
+    onChildRemoved(ref(game.db, "players"), (data: any) => {
+        for (let i = 0; i < game.objects.length; i++) {
+            if (game.objects[i].ref.key === data.key) {
+                game.objects.splice(i, 1);
+                return;
+            }
+        }
+    });
+}
+
+
+function onInit(game: Game) {
+    addObject(game, { 
+        type: ObjectType.Ship,
+        ownership: ObjectOwnership.Local,
+        ref: push(ref(game.db, "players")),
+        x: 0, 
+        y: 0,
+        rotation: 0,
+        velocity: 16.0,
+        clientX: 0, 
+        clientY: 0,
+        clientRotation: 0.0,
+        clientVelocity: 0.0,
+        serverX: 0, 
+        serverY: 0,
+        serverRotation: 0.0,
+        serverVelocity: 0.0,
+        texture: game.assets.ships,
+        textureRegion: { x: 0, y: 0, w: 32, h: 32 },
+        shootTime: 0.0,
+        updateTime: 0.0,
+        blendTime: 0.0,
+        blendFactor: 0.0
+    });
+}
+
+function onStep(game: Game, deltatime: number) {
+    const newObjects: Object[] = [];
+    for (let i = 0; i < game.objects.length; i++) {
+        const object = game.objects[i];
+
+        if (object.type === ObjectType.Ship && object.ownership === ObjectOwnership.Local) {
+            const x = (game.input["ArrowRight"] || 0.0) - (game.input["ArrowLeft"] || 0.0);
+            const y = (game.input["ArrowUp"] || 0.0) - (game.input["ArrowDown"] || 0.0);
 
             object.velocity = Math.max(8.0, Math.min(object.velocity + y * deltatime * 8.0, 32.0));
             object.x += Math.sin(object.rotation) * object.velocity * deltatime;
@@ -181,62 +281,69 @@ function onStep(deltatime: number) {
             object.rotation += x * deltatime * Math.PI;
             newObjects.push(object);
 
-            if (object.time === 0.0 && (input["z"] || input["Z"])) {
-                object.time = 0.1;
+            if (object.shootTime === 0.0 && (game.input["z"] || game.input["Z"])) {
+                object.shootTime = 0.1;
                 newObjects.push({
-                    type: "munition",
+                    type: ObjectType.Munition,
+                    ownership: ObjectOwnership.Local,
+                    ref: null,
                     x: object.x + Math.sin(object.rotation) * 1.0,
                     y: object.y - Math.cos(object.rotation) * 1.0,
                     rotation: object.rotation,
                     velocity: 64.0,
-                    texture: assets.tiles,
+                    clientX: 0, 
+                    clientY: 0,
+                    clientRotation: 0.0,
+                    clientVelocity: 0.0,
+                    serverX: 0, 
+                    serverY: 0,
+                    serverRotation: 0.0,
+                    serverVelocity: 0.0,
+                    texture: game.assets.tiles,
                     textureRegion: { x: 0, y: 0, w: 16, h: 16 },
-                    time: 0.0
+                    shootTime: 0.0,
+                    updateTime: 0.0,
+                    blendTime: 0.0,
+                    blendFactor: 0.0
                 });
-            } else if (object.time > 0.0) {
-                object.time = Math.max(0.0, object.time - deltatime);
+            } else if (object.shootTime > 0.0) {
+                object.shootTime = Math.max(0.0, object.shootTime - deltatime);
             }
 
             if (object.updateTime === 0.0 && (object.rotation !== object.serverRotation || object.velocity !== object.serverVelocity)) {
                 object.updateTime = 0.1;
                 object.serverRotation = object.rotation;
                 object.serverVelocity = object.velocity;
-
-                let timestamp = 0.0;
-                if (offsetVal !== null) {
-                    timestamp = new Date().getTime() + offsetVal;
-                }
-
                 update(object.ref, {
                     serverX: object.x, 
                     serverY: object.y,
                     serverRotation: object.rotation,
                     serverVelocity: object.velocity,
-                    timestamp: timestamp
+                    timestamp: getTimestamp(game)
                 });
             } else if (object.updateTime > 0.0) {
                 object.updateTime = Math.max(0.0, object.updateTime - deltatime);
             }
 
-        } else if (object.type === "munition") {
+        } else if (object.type === ObjectType.Munition && object.ownership === ObjectOwnership.Local) {
             object.x += Math.sin(object.rotation) * object.velocity * deltatime;
             object.y -= Math.cos(object.rotation) * object.velocity * deltatime;
-            object.time += deltatime;
-            if (object.time < 1.0) {
+            object.shootTime += deltatime;
+            if (object.shootTime < 1.0) {
                 newObjects.push(object);
             }
-        } else {
-            if (object.blend < 1.0) {
-                object.time += deltatime;
-                object.blend = Math.min(object.blend + deltatime / 0.2, 1.0);
-                object.rotation = boundedLerp(object.clientRotation, object.serverRotation, object.blend, -Math.PI, Math.PI);
-                object.velocity = lerp(object.clientVelocity, object.serverVelocity, object.blend);
-                const clientX = object.clientX + Math.sin(object.rotation) * object.velocity * object.time;
-                const clientY = object.clientY - Math.cos(object.rotation) * object.velocity * object.time;
-                const serverX = object.serverX + Math.sin(object.serverRotation) * object.serverVelocity * object.time;
-                const serverY = object.serverY - Math.cos(object.serverRotation) * object.serverVelocity * object.time;
-                object.x = boundedLerp(clientX, serverX, object.blend, 0, assets.map.width / 16.0);
-                object.y = boundedLerp(clientY, serverY, object.blend, 0, assets.map.height / 16.0);
+        } else if (object.type === ObjectType.Ship && object.ownership === ObjectOwnership.Remote) {
+            if (object.blendFactor < 1.0) {
+                object.blendTime += deltatime;
+                object.blendFactor = Math.min(object.blendFactor + deltatime / 0.2, 1.0);
+                object.rotation = boundedLerp(object.clientRotation, object.serverRotation, object.blendFactor, -Math.PI, Math.PI);
+                object.velocity = lerp(object.clientVelocity, object.serverVelocity, object.blendFactor);
+                const clientX = object.clientX + Math.sin(object.rotation) * object.velocity * object.blendTime;
+                const clientY = object.clientY - Math.cos(object.rotation) * object.velocity * object.blendTime;
+                const serverX = object.serverX + Math.sin(object.serverRotation) * object.serverVelocity * object.blendTime;
+                const serverY = object.serverY - Math.cos(object.serverRotation) * object.serverVelocity * object.blendTime;
+                object.x = boundedLerp(clientX, serverX, object.blendFactor, 0, game.assets.map.width / 16.0);
+                object.y = boundedLerp(clientY, serverY, object.blendFactor, 0, game.assets.map.height / 16.0);
             } else {
                 object.x += Math.sin(object.rotation) * object.velocity * deltatime;
                 object.y -= Math.cos(object.rotation) * object.velocity * deltatime;
@@ -244,103 +351,102 @@ function onStep(deltatime: number) {
             newObjects.push(object);
         }
 
-        while (object.x > assets.map.width / 16.0) { object.x -= assets.map.width / 16.0; }
-        while (object.x < 0.0) { object.x += assets.map.width / 16.0; }
-        while (object.y > assets.map.height / 16.0) { object.y -= assets.map.height / 16.0; }
-        while (object.y < 0.0) { object.y += assets.map.height / 16.0; }
+        while (object.x > game.assets.map.width / 16.0) { object.x -= game.assets.map.width / 16.0; }
+        while (object.x < 0.0) { object.x += game.assets.map.width / 16.0; }
+        while (object.y > game.assets.map.height / 16.0) { object.y -= game.assets.map.height / 16.0; }
+        while (object.y < 0.0) { object.y += game.assets.map.height / 16.0; }
         while (object.rotation > Math.PI) { object.rotation -= Math.PI * 2.0; }
         while (object.rotation < -Math.PI) { object.rotation += Math.PI * 2.0; }
     }
-    objects = newObjects;
+    game.objects = newObjects;
 }
 
-function onEvent(e) {
-    
-}
+function onRender(game: Game) {
+    game.ctx.reset();
+    game.ctx.imageSmoothingEnabled = false;
+    game.ctx.fillStyle = "black";
+    game.ctx.fillRect(0, 0, game.canvas.width, game.canvas.height);
 
-function onRender() {
-    ctx.reset();
-    ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.resetTransform();
-    ctx.translate(canvas.width * 0.5, canvas.height * 0.5);
+    game.ctx.resetTransform();
+    game.ctx.translate(game.canvas.width * 0.5, game.canvas.height * 0.5);
     const dpr = window.devicePixelRatio || 1;
-    ctx.scale(dpr, dpr);
-    ctx.scale(32, 32);
+    game.ctx.scale(dpr, dpr);
+    game.ctx.scale(32, 32);
 
-    ctx.translate(-objects[0].x, -objects[0].y);
-
+    game.ctx.translate(-game.objects[0].x, -game.objects[0].y);
     {
-        ctx.save();
-        ctx.filter = "blur(1px)";
+        game.ctx.save();
+        game.ctx.filter = "blur(1px)";
         for (let y = -1; y <= 1; y++) {
             for (let x = -1; x <= 1; x++) {
-                ctx.drawImage(assets.map, x * assets.map.width / 16.0, y * assets.map.height / 16.0, assets.map.width / 16.0, assets.map.height / 16.0);
+                game.ctx.drawImage(game.assets.map, x * game.assets.map.width / 16.0, y * game.assets.map.height / 16.0, game.assets.map.width / 16.0, game.assets.map.height / 16.0);
             }
         }
-        ctx.restore();
+        game.ctx.restore();
     }
 
-    for (let i = 0; i < objects.length; i++) {
-        const object = objects[i];
-        ctx.save();
+    for (let i = 0; i < game.objects.length; i++) {
+        const object = game.objects[i];
+        game.ctx.save();
 
-        if (object.type === "player") {
-            ctx.shadowColor = "rgb(0 0 0 / 25%)";
-            ctx.shadowBlur = 2;
-            ctx.shadowOffsetY = 24;
-        } else if (object.type === "munition") {
-            ctx.shadowColor = "#ffbd20";
-            ctx.shadowBlur = 16;
+        if (object.type === ObjectType.Ship) {
+            game.ctx.shadowColor = "rgb(0 0 0 / 25%)";
+            game.ctx.shadowBlur = 2;
+            game.ctx.shadowOffsetY = 24;
+        } else if (object.type === ObjectType.Munition) {
+            game.ctx.shadowColor = "#ffbd20";
+            game.ctx.shadowBlur = 16;
         }
 
         let x = object.x;
         let y = object.y;
 
-        if (x - objects[0].x > assets.map.width / 32.0) { x -= assets.map.width / 16.0; }
-        if (x - objects[0].x < -assets.map.width / 32.0) { x += assets.map.width / 16.0; }
-        if (y - objects[0].y > assets.map.height / 32.0) { y -= assets.map.height / 16.0; }
-        if (y - objects[0].y < -assets.map.height / 32.0) { y += assets.map.height / 16.0; }
+        if (x - game.objects[0].x > game.assets.map.width / 32.0) { x -= game.assets.map.width / 16.0; }
+        if (x - game.objects[0].x < -game.assets.map.width / 32.0) { x += game.assets.map.width / 16.0; }
+        if (y - game.objects[0].y > game.assets.map.height / 32.0) { y -= game.assets.map.height / 16.0; }
+        if (y - game.objects[0].y < -game.assets.map.height / 32.0) { y += game.assets.map.height / 16.0; }
 
-        ctx.translate(x, y);
-        ctx.rotate(object.rotation);
-        ctx.translate(-object.textureRegion.w / 32, -object.textureRegion.h / 32);
-        ctx.drawImage(object.texture, object.textureRegion.x, object.textureRegion.y, object.textureRegion.w, object.textureRegion.h, 0, 0, object.textureRegion.w / 16, object.textureRegion.h / 16);
-        ctx.restore();
+        game.ctx.translate(x, y);
+        game.ctx.rotate(object.rotation);
+        game.ctx.translate(-object.textureRegion.w / 32, -object.textureRegion.h / 32);
+        game.ctx.drawImage(object.texture, object.textureRegion.x, object.textureRegion.y, object.textureRegion.w, object.textureRegion.h, 0, 0, object.textureRegion.w / 16, object.textureRegion.h / 16);
+        game.ctx.restore();
     }
 }
 
-function resizeCanvas() {
+function resizeCanvas(game: Game) {
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = window.innerWidth * dpr;
-    canvas.height = window.innerHeight * dpr;
+    game.canvas.width = window.innerWidth * dpr;
+    game.canvas.height = window.innerHeight * dpr;
 }
 
-function gameloop(timestamp: DOMHighResTimeStamp) {
-    if (game.timestamp !== undefined) {
-        const deltatime = timestamp - game.timestamp;
-        onStep(deltatime / 1000.0);
-
-        /*game.accum = Math.min(game.accum + deltatime, 100.0);
-        while (game.accum >= 1000.0 / 60.0) {
-            onStep(1.0 / 60.0);
-            game.accum -= 1000.0 / 60.0;
-        }*/
+function getTimestamp(game: Game) {
+    if (game.offsetVal !== null) {
+        return new Date().getTime() + game.offsetVal;
+    } else {
+        return 0.0;
     }
-    game.timestamp = timestamp;
-
-    onRender();
-    requestAnimationFrame(gameloop);
 }
 
-window.addEventListener("keydown", (e) => { input[e.key] = true; onEvent(e); });
-window.addEventListener("keyup", (e) => { input[e.key] = false; });
-window.addEventListener("blur", (e) => { input = {}; });
+function getTimediff(game: Game, timestamp: number) {
+    if (timestamp !== 0.0 && game.offsetVal !== null) {
+        return (getTimestamp(game) - timestamp) / 1000.0;
+    } else {
+        return 0.0;
+    }
+}
 
-window.addEventListener("resize", resizeCanvas);
-window.addEventListener("load", () => {
-    resizeCanvas();
-    requestAnimationFrame(gameloop);
-});
+function addObject(game: Game, object: Object) {
+    game.objects.push(object);
+    onDisconnect(object.ref).remove();
+    set(object.ref, {
+        type: object.type,
+        serverX: object.x, 
+        serverY: object.y,
+        serverRotation: object.rotation,
+        serverVelocity: object.velocity,
+        texture: object.texture.src,
+        textureRegion: object.textureRegion,
+        timestamp: getTimestamp(game)
+    });
+}
