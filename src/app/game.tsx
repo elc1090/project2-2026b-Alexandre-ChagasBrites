@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, set, get, update, push, onValue, onChildAdded, onChildRemoved, onDisconnect } from "firebase/database";
+import { FirebaseApp, initializeApp } from "firebase/app";
+import { Database, Unsubscribe, getDatabase, ref, set, get, update, push, remove, onValue, onChildAdded, onChildRemoved, onDisconnect } from "firebase/database";
 
 type Rect = {
     x: number;
@@ -45,6 +45,7 @@ type Object = {
     updateTime: number;
     blendTime: number;
     blendFactor: number;
+    onValueUnsubscribe: Unsubscribe | null;
 };
 
 type Assets = {
@@ -57,15 +58,17 @@ type Game = {
     canvas: HTMLCanvasElement;
     ctx: CanvasRenderingContext2D;
 
+    requestId: number;
     timestamp: DOMHighResTimeStamp;
     accum: number;
     input: any;
     
     assets: Assets;
     objects: Object[];
+    player: Object | null;
 
-    app: any;
-    db: any;
+    app: FirebaseApp;
+    db: Database;
     offsetVal: number;
 };
 
@@ -82,10 +85,21 @@ export default function Canvas() {
             return;
         }
 
+        const firebaseConfig = {
+            apiKey: "AIzaSyAF7df33ABVrRoHnyXeRAkAqHchsMSDSzk",
+            authDomain: "pixel-shmup.firebaseapp.com",
+            projectId: "pixel-shmup",
+            storageBucket: "pixel-shmup.firebasestorage.app",
+            messagingSenderId: "226791231751",
+            appId: "1:226791231751:web:cb34c8d4d9478c0a2735a2"
+        };
+        const app = initializeApp(firebaseConfig);
+
         const game: Game = {
             canvas: canvas,
             ctx: ctx,
 
+            requestId: 0,
             timestamp: 0.0,
             accum: 0.0,
             input: {},
@@ -96,43 +110,21 @@ export default function Canvas() {
                 map: new Image()
             },
             objects: [],
+            player: null,
 
-            app: null,
-            db: null,
+            app: app,
+            db: getDatabase(app),
             offsetVal: 0.0
         };
 
-        initGame(game);
-        initDatabase(game);
-        onInit(game);
-    }, []);
+        game.assets.ships.src = "./ships.png";
+        game.assets.tiles.src = "./tiles.png";
+        game.assets.map.src = "./map.png";
 
-    return (
-        <canvas></canvas>
-    );
-}
-
-function lerp(a: number, b: number, t: number) {
-    return a * (1.0 - t) + b * t;
-}
-
-function boundedLerp(a: number, b: number, t: number, min: number, max: number) {
-    let delta = b - a;
-    if ((max - min) - Math.abs(delta) < Math.abs(delta)) { delta = ((max - min) - Math.abs(delta)) * Math.sign(-delta); }
-    return a + delta * t;
-}
-
-function initGame(game: Game) {
-    game.assets.ships.src = "./ships.png";
-    game.assets.tiles.src = "./tiles.png";
-    game.assets.map.src = "./map.png";
-
-    window.addEventListener("keydown", (e) => { game.input[e.key] = true; });
-    window.addEventListener("keyup", (e) => { game.input[e.key] = false; });
-    window.addEventListener("blur", (e) => { game.input = {}; });
-
-    window.addEventListener("resize", () => { resizeCanvas(game); });
-    window.addEventListener("load", () => {
+        const onKeydown = (e: KeyboardEvent) => { game.input[e.key] = true; };
+        const onKeyup = (e: KeyboardEvent) => { game.input[e.key] = false; };
+        const onBlur = (e: FocusEvent) => { game.input = {}; };
+        const onResize = (e: UIEvent) => { resizeCanvas(game); };
         const onAnimationFrame = (timestamp: DOMHighResTimeStamp) => {
             if (game.timestamp !== undefined) {
                 const deltatime = timestamp - game.timestamp;
@@ -147,123 +139,140 @@ function initGame(game: Game) {
             game.timestamp = timestamp;
 
             onRender(game);
-            requestAnimationFrame(onAnimationFrame);
+            game.requestId = requestAnimationFrame(onAnimationFrame);
         };
 
+        window.addEventListener("keydown", onKeydown);
+        window.addEventListener("keyup", onKeyup);
+        window.addEventListener("blur", onBlur);
+        window.addEventListener("resize", onResize);
+
         resizeCanvas(game);
-        requestAnimationFrame(onAnimationFrame);
-    });
-}
+        game.requestId = requestAnimationFrame(onAnimationFrame);
 
-function initDatabase(game: Game) {
-    const firebaseConfig = {
-        apiKey: "AIzaSyAF7df33ABVrRoHnyXeRAkAqHchsMSDSzk",
-        authDomain: "pixel-shmup.firebaseapp.com",
-        projectId: "pixel-shmup",
-        storageBucket: "pixel-shmup.firebasestorage.app",
-        messagingSenderId: "226791231751",
-        appId: "1:226791231751:web:cb34c8d4d9478c0a2735a2"
-    };
-    game.app = initializeApp(firebaseConfig);
-    game.db = getDatabase(game.app);
+        const offsetRef = ref(game.db, ".info/serverTimeOffset");
+        const onValueUnsubscribe = onValue(offsetRef, (data: any) => {
+            game.offsetVal = data.val() || 0.0;
+        });
 
-    const offsetRef = ref(game.db, ".info/serverTimeOffset");
-    onValue(offsetRef, (data: any) => {
-        game.offsetVal = data.val() || 0.0;
-    });
+        const onChildAddedUnsubscribe = onChildAdded(ref(game.db, "objects"), (data: any) => {
+            if (game.player !== null && data.key === game.player.ref.key) {
+                return;
+            }
+            
+            const texture = Object.values(game.assets).find(asset => asset.src === data.val().texture);
+            if (texture === undefined) {
+                return;
+            }
 
-    onChildAdded(ref(game.db, "players"), (data: any) => {
-        if (data.key === game.objects[0].ref.key) {
-            return;
-        }
+            const objectRef = ref(game.db, "objects/" + data.key);
+            let offsetTime = getTimediff(game, data.val().timestamp || 0.0);
+            const x = data.val().serverX + Math.sin(data.val().serverRotation) * data.val().serverVelocity * offsetTime;
+            const y = data.val().serverY - Math.cos(data.val().serverRotation) * data.val().serverVelocity * offsetTime;
+
+            const object: Object = {
+                type: data.val().type,
+                ownership: ObjectOwnership.Remote,
+                ref: objectRef,
+                x: x,
+                y: y,
+                rotation: data.val().serverRotation,
+                velocity: data.val().serverVelocity,
+                clientX: x,
+                clientY: y,
+                clientRotation: data.val().serverRotation,
+                clientVelocity: data.val().serverVelocity,
+                serverX: x,
+                serverY: y,
+                serverRotation: data.val().serverRotation,
+                serverVelocity: data.val().serverVelocity,
+                texture: texture,
+                textureRegion: data.val().textureRegion,
+                shootTime: 0.0,
+                updateTime: 0.0,
+                blendTime: 0.0,
+                blendFactor: 1.0,
+                onValueUnsubscribe: null,
+            };
+            game.objects.push(object);
+            console.log(object);
+
+            object.onValueUnsubscribe = onValue(objectRef, (data: any) => {
+                if (data.val() !== null) {
+                    let offsetTime = getTimediff(game, data.val().timestamp || 0.0);
+                    object.clientX = object.x;
+                    object.clientY = object.y;
+                    object.clientRotation = object.rotation;
+                    object.clientVelocity = object.velocity;
+                    object.serverRotation = data.val().serverRotation;
+                    object.serverVelocity = data.val().serverVelocity;
+                    object.serverX = data.val().serverX + Math.sin(object.serverRotation) * object.serverVelocity * offsetTime;
+                    object.serverY = data.val().serverY - Math.cos(object.serverRotation) * object.serverVelocity * offsetTime;
+                    object.blendTime = 0.0;
+                    object.blendFactor = 0.0;
+                }
+            });
+        });
+
+        const onChildRemovedUnsubscribe = onChildRemoved(ref(game.db, "objects"), (data: any) => {
+            console.log(data);
+            for (let i = 0; i < game.objects.length; i++) {
+                if (game.objects[i].ref.key === data.key) {
+                    game.objects.splice(i, 1);
+                    return;
+                }
+            }
+        });
         
-        const texture = Object.values(game.assets).find(asset => asset.src === data.val().texture);
-        if (texture === undefined) {
-            return;
-        }
-
-        const objectRef = ref(game.db, "players/" + data.key);
-        let offsetTime = getTimediff(game, data.val().timestamp || 0.0);
-        const x = data.val().serverX + Math.sin(data.val().serverRotation) * data.val().serverVelocity * offsetTime;
-        const y = data.val().serverY - Math.cos(data.val().serverRotation) * data.val().serverVelocity * offsetTime;
-
-        const object: Object = {
-            type: data.val().objectType,
-            ownership: ObjectOwnership.Remote,
-            ref: objectRef,
-            x: x,
-            y: y,
-            rotation: data.val().serverRotation,
-            velocity: data.val().serverVelocity,
-            clientX: x,
-            clientY: y,
-            clientRotation: data.val().serverRotation,
-            clientVelocity: data.val().serverVelocity,
-            serverX: x,
-            serverY: y,
-            serverRotation: data.val().serverRotation,
-            serverVelocity: data.val().serverVelocity,
-            texture: texture,
-            textureRegion: data.val().textureRegion,
+        game.player = { 
+            type: ObjectType.Ship,
+            ownership: ObjectOwnership.Local,
+            ref: push(ref(game.db, "objects")),
+            x: 0, 
+            y: 0,
+            rotation: 0,
+            velocity: 16.0,
+            clientX: 0, 
+            clientY: 0,
+            clientRotation: 0.0,
+            clientVelocity: 0.0,
+            serverX: 0, 
+            serverY: 0,
+            serverRotation: 0.0,
+            serverVelocity: 0.0,
+            texture: game.assets.ships,
+            textureRegion: { x: Math.floor(Math.random() * 4) * 32, y: Math.floor(Math.random() * 3) * 32, w: 32, h: 32 },
             shootTime: 0.0,
             updateTime: 0.0,
             blendTime: 0.0,
-            blendFactor: 1.0
+            blendFactor: 0.0,
+            onValueUnsubscribe: null
         };
-        game.objects.push(object);
+        addObject(game, game.player);
 
-        onValue(objectRef, (data: any) => {
-            if (data.val() !== null) {
-                let offsetTime = getTimediff(game, data.val().timestamp || 0.0);
-                object.clientX = object.x;
-                object.clientY = object.y;
-                object.clientRotation = object.rotation;
-                object.clientVelocity = object.velocity;
-                object.serverRotation = data.val().serverRotation;
-                object.serverVelocity = data.val().serverVelocity;
-                object.serverX = data.val().serverX + Math.sin(object.serverRotation) * object.serverVelocity * offsetTime;
-                object.serverY = data.val().serverY - Math.cos(object.serverRotation) * object.serverVelocity * offsetTime;
-                object.blendTime = 0.0;
-                object.blendFactor = 0.0;
+        return () => {
+            window.removeEventListener("keydown", onKeydown);
+            window.removeEventListener("keyup", onKeyup);
+            window.removeEventListener("blur", onBlur);
+            window.removeEventListener("resize", onResize);
+            cancelAnimationFrame(game.requestId);
+            onValueUnsubscribe();
+            onChildAddedUnsubscribe();
+            for (let i = 0; i < game.objects.length; i++) {
+                const object = game.objects[i];
+                if (object.onValueUnsubscribe !== null) {
+                    object.onValueUnsubscribe();
+                } else {
+                    remove(object.ref);
+                }
             }
-        });
-    });
+            onChildRemovedUnsubscribe();
+        };
+    }, []);
 
-    onChildRemoved(ref(game.db, "players"), (data: any) => {
-        for (let i = 0; i < game.objects.length; i++) {
-            if (game.objects[i].ref.key === data.key) {
-                game.objects.splice(i, 1);
-                return;
-            }
-        }
-    });
-}
-
-
-function onInit(game: Game) {
-    addObject(game, { 
-        type: ObjectType.Ship,
-        ownership: ObjectOwnership.Local,
-        ref: push(ref(game.db, "players")),
-        x: 0, 
-        y: 0,
-        rotation: 0,
-        velocity: 16.0,
-        clientX: 0, 
-        clientY: 0,
-        clientRotation: 0.0,
-        clientVelocity: 0.0,
-        serverX: 0, 
-        serverY: 0,
-        serverRotation: 0.0,
-        serverVelocity: 0.0,
-        texture: game.assets.ships,
-        textureRegion: { x: 0, y: 0, w: 32, h: 32 },
-        shootTime: 0.0,
-        updateTime: 0.0,
-        blendTime: 0.0,
-        blendFactor: 0.0
-    });
+    return (
+        <canvas></canvas>
+    );
 }
 
 function onStep(game: Game, deltatime: number) {
@@ -283,10 +292,10 @@ function onStep(game: Game, deltatime: number) {
 
             if (object.shootTime === 0.0 && (game.input["z"] || game.input["Z"])) {
                 object.shootTime = 0.1;
-                newObjects.push({
+                addObject(game, {
                     type: ObjectType.Munition,
                     ownership: ObjectOwnership.Local,
-                    ref: null,
+                    ref: push(ref(game.db, "objects")),
                     x: object.x + Math.sin(object.rotation) * 1.0,
                     y: object.y - Math.cos(object.rotation) * 1.0,
                     rotation: object.rotation,
@@ -304,7 +313,8 @@ function onStep(game: Game, deltatime: number) {
                     shootTime: 0.0,
                     updateTime: 0.0,
                     blendTime: 0.0,
-                    blendFactor: 0.0
+                    blendFactor: 0.0,
+                    onValueUnsubscribe: null
                 });
             } else if (object.shootTime > 0.0) {
                 object.shootTime = Math.max(0.0, object.shootTime - deltatime);
@@ -331,8 +341,10 @@ function onStep(game: Game, deltatime: number) {
             object.shootTime += deltatime;
             if (object.shootTime < 1.0) {
                 newObjects.push(object);
+            } else {
+                remove(object.ref);
             }
-        } else if (object.type === ObjectType.Ship && object.ownership === ObjectOwnership.Remote) {
+        } else if (object.ownership === ObjectOwnership.Remote) {
             if (object.blendFactor < 1.0) {
                 object.blendTime += deltatime;
                 object.blendFactor = Math.min(object.blendFactor + deltatime / 0.2, 1.0);
@@ -350,13 +362,10 @@ function onStep(game: Game, deltatime: number) {
             }
             newObjects.push(object);
         }
-
-        while (object.x > game.assets.map.width / 16.0) { object.x -= game.assets.map.width / 16.0; }
-        while (object.x < 0.0) { object.x += game.assets.map.width / 16.0; }
-        while (object.y > game.assets.map.height / 16.0) { object.y -= game.assets.map.height / 16.0; }
-        while (object.y < 0.0) { object.y += game.assets.map.height / 16.0; }
-        while (object.rotation > Math.PI) { object.rotation -= Math.PI * 2.0; }
-        while (object.rotation < -Math.PI) { object.rotation += Math.PI * 2.0; }
+    
+        object.x = modfract(object.x, game.assets.map.width / 16.0);
+        object.y = modfract(object.y, game.assets.map.height / 16.0);
+        object.rotation = modfract(object.rotation + Math.PI, Math.PI * 2.0) - Math.PI;
     }
     game.objects = newObjects;
 }
@@ -373,7 +382,10 @@ function onRender(game: Game) {
     game.ctx.scale(dpr, dpr);
     game.ctx.scale(32, 32);
 
-    game.ctx.translate(-game.objects[0].x, -game.objects[0].y);
+    if (game.player !== null)
+    {
+        game.ctx.translate(-game.player.x, -game.player.y);
+    }
     {
         game.ctx.save();
         game.ctx.filter = "blur(1px)";
@@ -401,10 +413,10 @@ function onRender(game: Game) {
         let x = object.x;
         let y = object.y;
 
-        if (x - game.objects[0].x > game.assets.map.width / 32.0) { x -= game.assets.map.width / 16.0; }
-        if (x - game.objects[0].x < -game.assets.map.width / 32.0) { x += game.assets.map.width / 16.0; }
-        if (y - game.objects[0].y > game.assets.map.height / 32.0) { y -= game.assets.map.height / 16.0; }
-        if (y - game.objects[0].y < -game.assets.map.height / 32.0) { y += game.assets.map.height / 16.0; }
+        if (x - (game.player?.x ?? 0.0) > game.assets.map.width / 32.0) { x -= game.assets.map.width / 16.0; }
+        if (x - (game.player?.x ?? 0.0) < -game.assets.map.width / 32.0) { x += game.assets.map.width / 16.0; }
+        if (y - (game.player?.y ?? 0.0) > game.assets.map.height / 32.0) { y -= game.assets.map.height / 16.0; }
+        if (y - (game.player?.y ?? 0.0) < -game.assets.map.height / 32.0) { y += game.assets.map.height / 16.0; }
 
         game.ctx.translate(x, y);
         game.ctx.rotate(object.rotation);
@@ -418,6 +430,20 @@ function resizeCanvas(game: Game) {
     const dpr = window.devicePixelRatio || 1;
     game.canvas.width = window.innerWidth * dpr;
     game.canvas.height = window.innerHeight * dpr;
+}
+
+function lerp(a: number, b: number, t: number) {
+    return a * (1.0 - t) + b * t;
+}
+
+function boundedLerp(a: number, b: number, t: number, min: number, max: number) {
+    let delta = b - a;
+    if ((max - min) - Math.abs(delta) < Math.abs(delta)) { delta = ((max - min) - Math.abs(delta)) * Math.sign(-delta); }
+    return a + delta * t;
+}
+
+function modfract(a: number, b: number) {
+    return b === 0.0 ? a : a - Math.floor(a / b) * b;
 }
 
 function getTimestamp(game: Game) {
