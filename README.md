@@ -26,7 +26,7 @@ Substitua este texto por um feedback produzido pelo(a) colega parceiro(a). Na mo
 
 ### Processo
 
-Substitua este texto por uma descrição do processo de desenvolvimento **em primeira pessoa, sem ajuda de IA**, explicando e justificando suas escolhas, destacando o que já sabia ou não, como lidou com dúvidas ou dificuldades específicas, que adaptações foram necessárias, etc. Evite comentários genéricos como "pedi ajuda para IA e resolvi", dando preferência para expor detalhes específicos de um problema e sua solução.
+Comecei o projeto desenvolvendo o jogo diretamente em HTML, CSS, JavaScript. Após ter o jogador se movendo pelo mapa, converti o projeto para Next.js, adicionei a database para fazer a sincronização entre jogadores e refatorei o código com tipos do TypeScript. São tecnologias que nunca utilizei antes, porém o uso do React acabou sendo mínimo, já que o jogo em si é só manipulação do canvas. Como o RTT da database é alto pra um jogo desse tipo, tive um trabalho para minimizar a diferença entre as posições dos jogadores. A solução que melhor funcionou foi de predição no cliente usando dead reckoning e o uso do serverTime para marcar as atualizações no servidor com o timestamp.
 
 ### Trechos de código
 
@@ -44,6 +44,30 @@ onValue(offsetRef, (data: any) => {
 const localTime = new Date().getTime() + offsetVal;
 const remoteTime = ...;
 const timeDiff = (localTime - remoteTime) / 1000.0;
+```
+
+Game Loop:
+
+```
+const onAnimationFrame = (timestamp: DOMHighResTimeStamp) => {
+    if (game.timestamp !== undefined) {
+        const deltatime = timestamp - game.timestamp;
+        onStep(game, deltatime / 1000.0);
+    }
+    game.timestamp = timestamp;
+
+    onRender(game);
+    game.requestId = requestAnimationFrame(onAnimationFrame);
+};
+
+game.requestId = requestAnimationFrame(onAnimationFrame);
+```
+
+Lifecycle dos Objetos:
+
+```
+const objectRef = push(ref(game.db, "objects"));
+onDisconnect(objectRef).remove();
 ```
 
 ## Tecnologias
@@ -71,6 +95,7 @@ Substitua este trecho por uma lista detalhada dos ambientes/ferramentas de desen
 - https://www.youtube.com/watch?v=pP7quzFmWBY
 - https://vercel.com/docs
 - https://kenney.nl/assets/pixel-shmup
+- https://gafferongames.com/post/fix_your_timestep/
 
 ---
 Projeto entregue para a disciplina de [Desenvolvimento de Software para a Web](http://github.com/andreainfufsm/elc1090-2026b) em 2026b

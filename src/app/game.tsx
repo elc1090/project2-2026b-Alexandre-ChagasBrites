@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { FirebaseApp, initializeApp } from "firebase/app";
-import { Database, Unsubscribe, getDatabase, ref, set, get, update, push, remove, onValue, onChildAdded, onChildRemoved, onDisconnect } from "firebase/database";
+import { Database, DatabaseReference, Unsubscribe, getDatabase, ref, set, get, update, push, remove, onValue, onChildAdded, onChildRemoved, onDisconnect } from "firebase/database";
 
 type Rect = {
     x: number;
@@ -29,7 +29,7 @@ type Object = {
     alive: boolean;
     type: ObjectType;
     ownership: ObjectOwnership;
-    ref: any;
+    ref: DatabaseReference | null;
     x: number;
     y: number;
     rotation: number;
@@ -63,7 +63,7 @@ type Game = {
     ctx: CanvasRenderingContext2D;
 
     requestId: number;
-    timestamp: DOMHighResTimeStamp;
+    timestamp: DOMHighResTimeStamp | undefined;
     accum: number;
     input: any;
     
@@ -74,6 +74,7 @@ type Game = {
     cameraY: number;
     score: number;
     maxScore: number;
+    serverScore: number | null;
 
     player: Object | null;
     enemyCount: number;
@@ -83,6 +84,7 @@ type Game = {
     app: FirebaseApp;
     db: Database;
     offsetVal: number;
+    scoreRef: DatabaseReference | null;
 };
 
 export default function Canvas() {
@@ -113,7 +115,7 @@ export default function Canvas() {
             ctx: ctx,
 
             requestId: 0,
-            timestamp: 0.0,
+            timestamp: undefined,
             accum: 0.0,
             input: {},
             
@@ -129,6 +131,7 @@ export default function Canvas() {
             cameraY: 0.0,
             score: 0,
             maxScore: 0,
+            serverScore: null,
 
             player: null,
             enemyCount: 0,
@@ -137,7 +140,8 @@ export default function Canvas() {
 
             app: app,
             db: getDatabase(app),
-            offsetVal: 0.0
+            offsetVal: 0.0,
+            scoreRef: null
         };
 
         game.assets.ships.src = "./ships.png";
@@ -175,8 +179,13 @@ export default function Canvas() {
         game.requestId = requestAnimationFrame(onAnimationFrame);
 
         const offsetRef = ref(game.db, ".info/serverTimeOffset");
-        const onValueUnsubscribe = onValue(offsetRef, (data: any) => {
+        const offsetRefOnValueUnsubscribe = onValue(offsetRef, (data: any) => {
             game.offsetVal = data.val() || 0.0;
+        });
+
+        game.scoreRef = ref(game.db, "maxScore");
+        const scoreRefOnValueUnsubscribe = onValue(game.scoreRef, (data: any) => {
+            game.serverScore = data.val() || 0.0;
         });
 
         const onChildAddedUnsubscribe = onChildAdded(ref(game.db, "objects"), (data: any) => {
@@ -243,7 +252,8 @@ export default function Canvas() {
 
         const onChildRemovedUnsubscribe = onChildRemoved(ref(game.db, "objects"), (data: any) => {
             for (let i = 0; i < game.objects.length; i++) {
-                if (game.objects[i].ref !== null && game.objects[i].ref.key === data.key) {
+                const object = game.objects[i];
+                if (object.ref !== null && object.ref.key === data.key) {
                     removeObject(game, game.objects[i]);
                     return;
                 }
@@ -256,7 +266,8 @@ export default function Canvas() {
             window.removeEventListener("blur", onBlur);
             window.removeEventListener("resize", onResize);
             cancelAnimationFrame(game.requestId);
-            onValueUnsubscribe();
+            offsetRefOnValueUnsubscribe();
+            scoreRefOnValueUnsubscribe();
             onChildAddedUnsubscribe();
             for (let i = 0; i < game.objects.length; i++) {
                 const object = game.objects[i];
@@ -329,7 +340,7 @@ function onStep(game: Game, deltatime: number) {
                 object.shootTime = Math.max(0.0, object.shootTime - deltatime);
             }
 
-            if (object.updateTime === 0.0 && (object.rotation !== object.serverRotation || object.velocity !== object.serverVelocity)) {
+            if (object.ref !== null && object.updateTime === 0.0 && (object.rotation !== object.serverRotation || object.velocity !== object.serverVelocity)) {
                 object.updateTime = 0.1;
                 object.serverRotation = object.rotation;
                 object.serverVelocity = object.velocity;
@@ -509,6 +520,10 @@ function onRender(game: Game) {
     game.ctx.lineWidth = 8;
     game.ctx.strokeText(`Hi-Score ${game.maxScore}`, 64, 160);
     game.ctx.fillText(`Hi-Score ${game.maxScore}`, 64, 160);
+    if (game.serverScore !== null) {
+        game.ctx.strokeText(`Global Hi-Score ${game.serverScore}`, 64, 192);
+        game.ctx.fillText(`Global Hi-Score ${game.serverScore}`, 64, 192);
+    }
 }
 
 function resizeCanvas(game: Game) {
@@ -581,7 +596,12 @@ function spawnPlayer(game: Game, x: number, y: number) {
         blendFactor: 0.0,
         onValueUnsubscribe: null
     };
-    game.maxScore = Math.max(game.maxScore, game.score);
+    if (game.score > game.maxScore) {
+        game.maxScore = game.score;
+        if (game.scoreRef !== null && (game.serverScore === null || game.score > game.serverScore)) {
+            set(game.scoreRef, game.maxScore);
+        }
+    }
     game.score = 0;
     game.scoreTime = 0.0;
     addObject(game, game.player);
