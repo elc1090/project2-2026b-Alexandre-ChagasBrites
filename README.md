@@ -1,16 +1,6 @@
 # Projeto: Aplicação com persistência de dados em backend
 
-> 1. Leia com atenção as instruções abaixo para editar este README em formato Markdown.
-> 2. Substitua todos os trechos de texto iniciados com "Substitua" por informações do seu projeto, conforme solicitado em cada trecho.
-> 3. Substitua a imagem animada por um GIF/WEBP mostrando o resultado do seu projeto (o arquivo pode ser armazenado no repositório ou em URL externa). 
-> 4. Remova todas as instruções de entrega.
-> 5. Renomeie esta arquivo para README.md e entregue-o dentro da pasta raiz do seu repositório de entrega. 
-> 6. Double-check: Certifique-se de que seu README.md não contenha instruções de entrega e seja visualizado corretamente ao abrir seu repositório!
-> Opcional: você pode alterar a formatação deste README, mas mantenha todas as informações solicitadas.
-
-![Substitua a imagem ao lado por um GIF/WEBP animado mostrando seu projeto](./moho_follow_through2.gif "GIF animado do projeto. Imagem temporária de Moho Animation https://moho.lostmarble.com/products/moho-pro-special-halls-head-college")
-
-
+![GIF animado do projeto](./pixel-shmup.gif)
 
 ## Acesso
 
@@ -80,7 +70,7 @@ Substitua este trecho por uma lista detalhada dos ambientes/ferramentas de desen
 - https://www.youtube.com/watch?v=rQvOAnNvcNQ
 - https://www.youtube.com/watch?v=pP7quzFmWBY
 - https://vercel.com/docs
-
+- https://kenney.nl/assets/pixel-shmup
 
 ---
 Projeto entregue para a disciplina de [Desenvolvimento de Software para a Web](http://github.com/andreainfufsm/elc1090-2026b) em 2026b

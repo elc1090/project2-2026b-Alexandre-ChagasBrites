@@ -69,11 +69,15 @@ type Game = {
     
     assets: Assets;
     objects: Object[];
+    objectsChanged: boolean;
     cameraX: number;
     cameraY: number;
+    score: number;
+    maxScore: number;
 
     player: Object | null;
     enemyCount: number;
+    scoreTime: number;
     spawnTime: number;
 
     app: FirebaseApp;
@@ -120,11 +124,15 @@ export default function Canvas() {
                 regions: new Image()
             },
             objects: [],
+            objectsChanged: false,
             cameraX: 0.0,
             cameraY: 0.0,
+            score: 0,
+            maxScore: 0,
 
             player: null,
             enemyCount: 0,
+            scoreTime: 0.0,
             spawnTime: 0.0,
 
             app: app,
@@ -241,8 +249,6 @@ export default function Canvas() {
                 }
             }
         });
-        
-        spawnPlayer(game);
 
         return () => {
             window.removeEventListener("keydown", onKeydown);
@@ -270,19 +276,32 @@ export default function Canvas() {
 }
 
 function onStep(game: Game, deltatime: number) {
-    if (game.spawnTime === 0.0 && game.enemyCount < 100) {
+    if (game.player !== null && game.scoreTime < 1.0) {
+        game.scoreTime += deltatime / 0.1;
+    } else if (game.player != null && game.scoreTime >= 1.0) {
+        game.score++;
+        game.scoreTime = 0.0;
+    }
+
+    if (game.spawnTime === 0.0 && game.assets.regions.complete) {
         game.spawnTime = 1.0;
 
-        const x = Math.floor(Math.random() * game.assets.regions.width);
-        const y = Math.floor(Math.random() * game.assets.regions.height);
+        const x = Math.floor(Math.random() * game.assets.regions.width) + 0.5;
+        const y = Math.floor(Math.random() * game.assets.regions.height) + 0.5;
 
-        game.ctx.reset();
-        game.ctx.imageSmoothingEnabled = false;
-        game.ctx.drawImage(game.assets.regions, x, y, 1, 1, 0, 0, 1, 1);
-        
-        const pixelData = game.ctx.getImageData(0, 0, 1, 1).data;
-        if (pixelData[1] > 128) {
-            spawnEnemy(game, x, y);
+        if (game.player === null) {
+            spawnPlayer(game, x, y);
+        } else if (game.enemyCount < 64) {
+            game.ctx.reset();
+            game.ctx.imageSmoothingEnabled = false;
+            game.ctx.drawImage(game.assets.regions, x, y, 1, 1, 0, 0, 1, 1);
+            
+            const pixelData = game.ctx.getImageData(0, 0, 1, 1).data;
+            if (pixelData[0] > 128) {
+                spawnEnemy(game, x, y, 64, 32);
+            } else if (pixelData[1] > 128) {
+                spawnEnemy(game, x, y, 80 + Math.floor(Math.random() * 2) * 16, 32);
+            }
         }
     } else if (game.spawnTime > 0.0) {
         game.spawnTime = Math.max(0.0, game.spawnTime - deltatime);
@@ -305,7 +324,7 @@ function onStep(game: Game, deltatime: number) {
 
             if (object.shootTime === 0.0 && (game.input["z"] || game.input["Z"])) {
                 object.shootTime = 0.1;
-                spawnMunition(game, object);
+                spawnMunition(game, object, 64.0, 0, 0);
             } else if (object.shootTime > 0.0) {
                 object.shootTime = Math.max(0.0, object.shootTime - deltatime);
             }
@@ -334,16 +353,23 @@ function onStep(game: Game, deltatime: number) {
                     continue;
                 }
 
-                const offsetX = otherObject.x - object.x;
-                const offsetY = otherObject.y - object.y;
+                let offsetX = otherObject.x - object.x;
+                let offsetY = otherObject.y - object.y;
+                if (offsetX > game.assets.map.width / 32.0) { offsetX -= game.assets.map.width / 16.0; }
+                if (offsetX < -game.assets.map.width / 32.0) { offsetX += game.assets.map.width / 16.0; }
+                if (offsetY > game.assets.map.height / 32.0) { offsetY -= game.assets.map.height / 16.0; }
+                if (offsetY < -game.assets.map.height / 32.0) { offsetY += game.assets.map.height / 16.0; }
                 if (offsetX * offsetX + offsetY * offsetY > 1.0) {
                     continue;
                 }
                 
-                if (otherObject.type === ObjectType.Enemy) {
+                if ((otherObject.type === ObjectType.Ship && otherObject.ownership === ObjectOwnership.Local) || otherObject.type === ObjectType.Enemy) {
                     removeObject(game, object);
                     removeObject(game, otherObject);
                     spawnExplosion(game, otherObject.x, otherObject.y);
+                    if (otherObject.type === ObjectType.Enemy && game.player !== null) {
+                        game.score += 100;
+                    }
                 }
             }
 
@@ -353,11 +379,29 @@ function onStep(game: Game, deltatime: number) {
             }
         } else if (object.type === ObjectType.Enemy) {
             if (game.player !== null) {
-                const offsetX = game.player.x - object.x;
-                const offsetY = game.player.y - object.y;
+                let offsetX = game.player.x - object.x;
+                let offsetY = game.player.y - object.y;
+
+                if (offsetX > game.assets.map.width / 32.0) { offsetX -= game.assets.map.width / 16.0; }
+                if (offsetX < -game.assets.map.width / 32.0) { offsetX += game.assets.map.width / 16.0; }
+                if (offsetY > game.assets.map.height / 32.0) { offsetY -= game.assets.map.height / 16.0; }
+                if (offsetY < -game.assets.map.height / 32.0) { offsetY += game.assets.map.height / 16.0; }
+
                 if (offsetX * offsetX + offsetY * offsetY < 25.0 * 25.0) {
-                    const rotation = Math.atan2(offsetY, offsetX) - Math.PI * 0.5;
-                    object.rotation += clamp(boundedDiff(object.rotation, rotation, -Math.PI, Math.PI), -Math.PI * 0.5 * deltatime, Math.PI * 0.5 * deltatime);
+                    const rotation = Math.atan2(offsetY, offsetX) + Math.PI * 0.5;
+                    const offsetRotation = boundedDiff(object.rotation, rotation, -Math.PI, Math.PI);
+                    object.rotation += clamp(offsetRotation, -Math.PI * 0.5 * deltatime, Math.PI * 0.5 * deltatime);
+                    if (Math.abs(offsetRotation) < Math.PI * 0.1) {
+                        object.shootTime += deltatime;
+                        if (object.shootTime >= 1.5) {
+                            object.shootTime = 0.0;
+                            spawnMunition(game, object, 32.0, 32, 0);
+                        }
+                    } else {
+                        object.shootTime = Math.max(0.0, object.shootTime - deltatime);
+                    }
+                } else {
+                    object.shootTime = Math.max(0.0, object.shootTime - deltatime);
                 }
             }
         } else if (object.type === ObjectType.Explosion) {
@@ -414,7 +458,7 @@ function onRender(game: Game) {
     game.ctx.translate(-game.cameraX, -game.cameraY);
 
     game.ctx.save();
-    game.ctx.filter = "blur(1px)";
+    game.ctx.imageSmoothingEnabled = true;
     for (let y = -1; y <= 1; y++) {
         for (let x = -1; x <= 1; x++) {
             game.ctx.drawImage(game.assets.map, x * game.assets.map.width / 16.0, y * game.assets.map.height / 16.0, game.assets.map.width / 16.0, game.assets.map.height / 16.0);
@@ -422,7 +466,10 @@ function onRender(game: Game) {
     }
     game.ctx.restore();
 
-    game.objects.sort((a: Object, b: Object) => b.type - a.type);
+    if (game.objectsChanged) {
+        game.objects.sort((a: Object, b: Object) => b.type - a.type);
+        game.objectsChanged = false;
+    }
     for (let i = 0; i < game.objects.length; i++) {
         const object = game.objects[i];
         game.ctx.save();
@@ -439,10 +486,10 @@ function onRender(game: Game) {
         let x = object.x;
         let y = object.y;
 
-        if (x - (game.player?.x ?? 0.0) > game.assets.map.width / 32.0) { x -= game.assets.map.width / 16.0; }
-        if (x - (game.player?.x ?? 0.0) < -game.assets.map.width / 32.0) { x += game.assets.map.width / 16.0; }
-        if (y - (game.player?.y ?? 0.0) > game.assets.map.height / 32.0) { y -= game.assets.map.height / 16.0; }
-        if (y - (game.player?.y ?? 0.0) < -game.assets.map.height / 32.0) { y += game.assets.map.height / 16.0; }
+        if (x - game.cameraX > game.assets.map.width / 32.0) { x -= game.assets.map.width / 16.0; }
+        if (x - game.cameraX < -game.assets.map.width / 32.0) { x += game.assets.map.width / 16.0; }
+        if (y - game.cameraY > game.assets.map.height / 32.0) { y -= game.assets.map.height / 16.0; }
+        if (y - game.cameraY < -game.assets.map.height / 32.0) { y += game.assets.map.height / 16.0; }
 
         game.ctx.translate(x, y);
         game.ctx.rotate(object.rotation);
@@ -450,6 +497,18 @@ function onRender(game: Game) {
         game.ctx.drawImage(object.texture, object.textureRegion.x, object.textureRegion.y, object.textureRegion.w, object.textureRegion.h, 0, 0, object.textureRegion.w / 16, object.textureRegion.h / 16);
         game.ctx.restore();
     }
+
+    game.ctx.resetTransform();
+    game.ctx.fillStyle = "white";
+    game.ctx.strokeStyle = "#434a5f";
+    game.ctx.font = '48px "Press Start 2P", system-ui';
+    game.ctx.lineWidth = 8;
+    game.ctx.strokeText(`Score ${game.score}`, 64, 128);
+    game.ctx.fillText(`Score ${game.score}`, 64, 128);
+    game.ctx.font = '24px "Press Start 2P", system-ui';
+    game.ctx.lineWidth = 8;
+    game.ctx.strokeText(`Hi-Score ${game.maxScore}`, 64, 160);
+    game.ctx.fillText(`Hi-Score ${game.maxScore}`, 64, 160);
 }
 
 function resizeCanvas(game: Game) {
@@ -496,15 +555,15 @@ function getTimediff(game: Game, timestamp: number) {
     }
 }
 
-function spawnPlayer(game: Game) {
+function spawnPlayer(game: Game, x: number, y: number) {
     game.player = { 
         alive: true,
         type: ObjectType.Ship,
         ownership: ObjectOwnership.Local,
         ref: push(ref(game.db, "objects")),
-        x: 0, 
-        y: 0,
-        rotation: 0,
+        x: x, 
+        y: y,
+        rotation: Math.random() * Math.PI * 2.0 - Math.PI,
         velocity: 16.0,
         clientX: 0, 
         clientY: 0,
@@ -522,18 +581,21 @@ function spawnPlayer(game: Game) {
         blendFactor: 0.0,
         onValueUnsubscribe: null
     };
+    game.maxScore = Math.max(game.maxScore, game.score);
+    game.score = 0;
+    game.scoreTime = 0.0;
     addObject(game, game.player);
 }
 
-function spawnEnemy(game: Game, x: number, y: number) {
+function spawnEnemy(game: Game, x: number, y: number, u: number, v: number) {
     addObject(game, {
         alive: true,
         type: ObjectType.Enemy,
         ownership: ObjectOwnership.Local,
         ref: push(ref(game.db, "objects")),
-        x: x + 0.5,
-        y: y + 0.5,
-        rotation: 0.0,
+        x: x,
+        y: y,
+        rotation: Math.random() * Math.PI * 2.0 - Math.PI,
         velocity: 0.0,
         clientX: 0, 
         clientY: 0,
@@ -544,7 +606,7 @@ function spawnEnemy(game: Game, x: number, y: number) {
         serverRotation: 0.0,
         serverVelocity: 0.0,
         texture: game.assets.tiles,
-        textureRegion: { x: 64, y: 32, w: 16, h: 16 },
+        textureRegion: { x: u, y: v, w: 16, h: 16 },
         shootTime: 0.0,
         updateTime: 0.0,
         blendTime: 0.0,
@@ -553,7 +615,7 @@ function spawnEnemy(game: Game, x: number, y: number) {
     });
 }
 
-function spawnMunition(game: Game, object: Object) {
+function spawnMunition(game: Game, object: Object, velocity: number, u: number, v: number) {
     addObject(game, {
         alive: true,
         type: ObjectType.Munition,
@@ -562,7 +624,7 @@ function spawnMunition(game: Game, object: Object) {
         x: object.x + Math.sin(object.rotation) * 1.0,
         y: object.y - Math.cos(object.rotation) * 1.0,
         rotation: object.rotation,
-        velocity: 64.0,
+        velocity: velocity,
         clientX: 0, 
         clientY: 0,
         clientRotation: 0.0,
@@ -572,7 +634,7 @@ function spawnMunition(game: Game, object: Object) {
         serverRotation: 0.0,
         serverVelocity: 0.0,
         texture: game.assets.tiles,
-        textureRegion: { x: 0, y: 0, w: 16, h: 16 },
+        textureRegion: { x: u, y: v, w: 16, h: 16 },
         shootTime: 0.0,
         updateTime: 0.0,
         blendTime: 0.0,
@@ -600,7 +662,7 @@ function spawnExplosion(game: Game, x: number, y: number) {
         serverRotation: 0.0,
         serverVelocity: 0.0,
         texture: game.assets.tiles,
-        textureRegion: { x: 64, y: 0, w: 16, h: 16 },
+        textureRegion: { x: 64 + Math.floor(Math.random() * 3) * 16, y: 0, w: 16, h: 16 },
         shootTime: 0.0,
         updateTime: 0.0,
         blendTime: 0.0,
@@ -611,6 +673,7 @@ function spawnExplosion(game: Game, x: number, y: number) {
 
 function addObject(game: Game, object: Object) {
     game.objects.push(object);
+    game.objectsChanged = true;
     if (object.type === ObjectType.Enemy) {
         game.enemyCount++;
     }
@@ -635,6 +698,11 @@ function removeObject(game: Game, object: Object) {
         return;
     }
     object.alive = false;
+    game.objectsChanged = true;
+    if (game.player === object) {
+        game.player = null;
+        game.spawnTime = 3.0;
+    }
     if (object.type === ObjectType.Enemy) {
         game.enemyCount--;
     }
